@@ -1,0 +1,294 @@
+================================================================================
+FILE STRUCTURE ON SD CARD
+================================================================================
+
+/apps/
+├── trackpad.manifest          ← App manifest file
+├── trackpad_app.h             ← Actual app code (loaded into RAM)
+├── keyboard.manifest
+├── keyboard_app.h
+├── calculator.manifest
+└── calculator_app.h
+
+/data/
+└── settings.txt               ← System settings
+
+================================================================================
+FILE 1: /apps/trackpad.manifest
+================================================================================
+
+name=USB Trackpad
+description=Use touchscreen as USB mouse
+version=1.0
+author=System
+codefile=trackpad_app.h
+enabled=true
+size=15000
+
+================================================================================
+FILE 2: /apps/trackpad_app.h
+================================================================================
+
+/* 
+ * USB Trackpad App Code
+ * This file is loaded from SD card into RAM when app launches
+ * 
+ * The app loader reads this file and keeps it in memory
+ * Total size: ~15KB (much smaller than keeping in flash)
+ */
+
+#include "USB.h"
+#include "USBHIDMouse.h"
+
+// App-specific globals (will be in RAM when loaded)
+static USBHIDMouse trackpadMouse;
+static bool trackpadActive = false;
+static int16_t lastX = 0, lastY = 0;
+static bool wasTouched = false;
+static float sensitivity = 2.0;
+
+void trackpad_app_setup() {
+    // Initialize USB Mouse
+    trackpadMouse.begin();
+    USB.begin();
+    
+    // Create UI
+    lv_obj_clean(lv_scr_act());
+    lv_obj_t * screen = lv_scr_act();
+    
+    // Title
+    lv_obj_t * title = lv_label_create(screen);
+    lv_label_set_text(title, "USB TRACKPAD");
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
+    
+    // Trackpad area
+    lv_obj_t * pad = lv_obj_create(screen);
+    lv_obj_set_size(pad, 280, 140);
+    lv_obj_align(pad, LV_ALIGN_CENTER, 0, -10);
+    lv_obj_set_style_bg_color(pad, lv_color_hex(0x00FF00), 0);
+    
+    // Instructions
+    lv_obj_t * info = lv_label_create(pad);
+    lv_label_set_text(info, "Move finger to control mouse");
+    lv_obj_center(info);
+    
+    // Back button
+    lv_obj_t * back_btn = lv_btn_create(screen);
+    lv_obj_set_size(back_btn, 100, 40);
+    lv_obj_align(back_btn, LV_ALIGN_BOTTOM_LEFT, 10, -10);
+    
+    lv_obj_t * back_label = lv_label_create(back_btn);
+    lv_label_set_text(back_label, "BACK");
+    lv_obj_center(back_label);
+    
+    lv_obj_add_event_cb(back_btn, [](lv_event_t * e) {
+        if (lv_event_get_code(e) == LV_EVENT_CLICKED) {
+            trackpadActive = false;
+            extern void createModularAppLauncher();
+            createModularAppLauncher();
+        }
+    }, LV_EVENT_CLICKED, NULL);
+    
+    // Click buttons
+    lv_obj_t * left_btn = lv_btn_create(screen);
+    lv_obj_set_size(left_btn, 80, 40);
+    lv_obj_align(left_btn, LV_ALIGN_BOTTOM_MID, -45, -10);
+    
+    lv_obj_t * left_label = lv_label_create(left_btn);
+    lv_label_set_text(left_label, "LEFT");
+    lv_obj_center(left_label);
+    
+    lv_obj_add_event_cb(left_btn, [](lv_event_t * e) {
+        if (lv_event_get_code(e) == LV_EVENT_PRESSED) {
+            trackpadMouse.press(MOUSE_LEFT);
+        } else if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
+            trackpadMouse.release(MOUSE_LEFT);
+        }
+    }, LV_EVENT_ALL, NULL);
+    
+    lv_obj_t * right_btn = lv_btn_create(screen);
+    lv_obj_set_size(right_btn, 80, 40);
+    lv_obj_align(right_btn, LV_ALIGN_BOTTOM_MID, 45, -10);
+    
+    lv_obj_t * right_label = lv_label_create(right_btn);
+    lv_label_set_text(right_label, "RIGHT");
+    lv_obj_center(right_label);
+    
+    lv_obj_add_event_cb(right_btn, [](lv_event_t * e) {
+        if (lv_event_get_code(e) == LV_EVENT_PRESSED) {
+            trackpadMouse.press(MOUSE_RIGHT);
+        } else if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
+            trackpadMouse.release(MOUSE_RIGHT);
+        }
+    }, LV_EVENT_ALL, NULL);
+    
+    trackpadActive = true;
+}
+
+void trackpad_app_loop() {
+    if (!trackpadActive) return;
+    
+    extern int16_t touch_last_x, touch_last_y;
+    extern bool touch_touched();
+    
+    if (touch_touched()) {
+        if (wasTouched) {
+            int16_t dx = (touch_last_x - lastX) * sensitivity;
+            int16_t dy = (touch_last_y - lastY) * sensitivity;
+            trackpadMouse.move(dx, dy);
+        }
+        lastX = touch_last_x;
+        lastY = touch_last_y;
+        wasTouched = true;
+    } else {
+        wasTouched = false;
+    }
+}
+
+void trackpad_app_cleanup() {
+    trackpadActive = false;
+}
+
+================================================================================
+FILE 3: /apps/calculator.manifest
+================================================================================
+
+name=Calculator
+description=Basic calculator
+version=1.0
+author=System
+codefile=calculator_app.h
+enabled=true
+size=8000
+
+================================================================================
+FILE 4: /apps/calculator_app.h
+================================================================================
+
+/*
+ * Calculator App Code
+ * Stored on SD card, loaded when needed
+ */
+
+static char calc_display[32] = "0";
+static float calc_value = 0;
+static char calc_operation = ' ';
+static lv_obj_t * calc_display_label = NULL;
+
+void calculator_button_event(lv_event_t * e) {
+    lv_obj_t * btn = lv_event_get_target(e);
+    const char * txt = lv_label_get_text(lv_obj_get_child(btn, 0));
+    
+    // Handle button press
+    if (strcmp(txt, "C") == 0) {
+        strcpy(calc_display, "0");
+        calc_value = 0;
+        calc_operation = ' ';
+    } else if (strcmp(txt, "=") == 0) {
+        // Calculate result
+        float current = atof(calc_display);
+        switch(calc_operation) {
+            case '+': calc_value += current; break;
+            case '-': calc_value -= current; break;
+            case '*': calc_value *= current; break;
+            case '/': if(current != 0) calc_value /= current; break;
+        }
+        snprintf(calc_display, sizeof(calc_display), "%.2f", calc_value);
+        calc_operation = ' ';
+    } else if (strchr("+-*/", txt[0])) {
+        calc_value = atof(calc_display);
+        calc_operation = txt[0];
+        strcpy(calc_display, "0");
+    } else {
+        // Number button
+        if (strcmp(calc_display, "0") == 0) {
+            strcpy(calc_display, txt);
+        } else {
+            strcat(calc_display, txt);
+        }
+    }
+    
+    lv_label_set_text(calc_display_label, calc_display);
+}
+
+void calculator_app_setup() {
+    lv_obj_clean(lv_scr_act());
+    lv_obj_t * screen = lv_scr_act();
+    
+    // Display
+    calc_display_label = lv_label_create(screen);
+    lv_label_set_text(calc_display_label, "0");
+    lv_obj_set_size(calc_display_label, 280, 40);
+    lv_obj_align(calc_display_label, LV_ALIGN_TOP_MID, 0, 10);
+    lv_obj_set_style_bg_color(calc_display_label, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_align(calc_display_label, LV_TEXT_ALIGN_RIGHT, 0);
+    
+    // Button grid
+    const char * btnm_map[] = {
+        "7", "8", "9", "/", "\n",
+        "4", "5", "6", "*", "\n",
+        "1", "2", "3", "-", "\n",
+        "C", "0", "=", "+", ""
+    };
+    
+    lv_obj_t * btnm = lv_btnmatrix_create(screen);
+    lv_btnmatrix_set_map(btnm, btnm_map);
+    lv_obj_set_size(btnm, 280, 160);
+    lv_obj_align(btnm, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_add_event_cb(btnm, calculator_button_event, LV_EVENT_CLICKED, NULL);
+}
+
+void calculator_app_loop() {
+    // No continuous updates needed
+}
+
+void calculator_app_cleanup() {
+    calc_display_label = NULL;
+}
+
+================================================================================
+HOW TO USE THIS SYSTEM
+================================================================================
+
+1. CREATE FILES ON SD CARD:
+   - Copy the .manifest and .h files to /apps/ folder
+   - Make sure filenames match exactly
+
+2. MAIN FIRMWARE STAYS SMALL:
+   - Only includes core system, UI framework, drivers
+   - Apps are NOT compiled into firmware
+   - Apps load into RAM only when launched
+
+3. MEMORY USAGE:
+   - Flash: Core system only (~500KB)
+   - RAM: One app at a time (~15-50KB per app)
+   - SD Card: Store unlimited apps
+
+4. ADVANTAGES:
+   ✅ Add/remove apps without reflashing
+   ✅ Share apps between devices (copy SD card)
+   ✅ Update apps by replacing .h files
+   ✅ Minimal flash usage
+   ✅ Apps unload when not needed
+
+5. LIMITATIONS:
+   ⚠ Apps must be written as header files
+   ⚠ One app active at a time
+   ⚠ Apps can't use libraries not in main firmware
+   ⚠ Need enough RAM to load app code
+
+================================================================================
+STORAGE SAVINGS EXAMPLE
+================================================================================
+
+WITHOUT modular system:
+Main Firmware: 1.8 MB (includes all apps)
+Available Flash: 200 KB
+SD Card: Unused
+
+WITH modular system:
+Main Firmware: 500 KB (core only)
+Available Flash: 1.5 MB (for updates, data)
+SD Card: 100+ apps possible
+
+================================================================================
